@@ -11,7 +11,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'project-1', url: 'https://github.com/your-username/your-repo.git'
+                git branch: 'project1', url: 'https://github.com/Hermosun/proj-mdp-152-155.git'
             }
         }
         
