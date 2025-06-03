@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     environment {
-        PATH = "/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+        PATH = "/opt/java/openjdk/bin://usr/local/bin:/usr/bin:/bin:$PATH"
         DOCKER_PATH = "/usr/local/bin/docker"
         
         DOCKER_IMAGE = "calculator-app"
