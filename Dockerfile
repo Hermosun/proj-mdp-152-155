@@ -3,8 +3,8 @@ WORKDIR /app
 COPY . .
 RUN mvn clean package -DskipTests
 
-FROM openjdk:11-jre-slim
-WORKDIR /app
-COPY --from=build /app/target/*.war app.war
+FROM tomcat:9.0-jdk11-openjdk-slim
+WORKDIR /usr/local/tomcat/webapps
+COPY --from=build /app/target/*.war ROOT.war
 EXPOSE 8080
-CMD ["java", "-jar", "app.war"]
+CMD ["catalina.sh", "run"]
