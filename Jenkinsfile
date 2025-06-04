@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     environment {
-        PATH = "/opt/java/openjdk/bin://usr/local/bin:/usr/bin:/bin:$PATH"
+        PATH = "/opt/java/openjdk/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
         DOCKER_PATH = "/usr/local/bin/docker"
         
         DOCKER_IMAGE = "calculator-app"
@@ -67,8 +67,11 @@ pipeline {
                     // Check if container is running
                     sh "docker ps | grep ${CONTAINER_NAME}"
                     
-                    // Optional: Health check
-                    sh "curl -f http://localhost:${APP_PORT}/calculator/ || exit 1"
+                    // Health check - verify application responds
+                    sh "curl -f http://localhost:${APP_PORT}/ || exit 1"
+                    
+                    // Additional check - verify Java process is running
+                    sh "docker exec ${CONTAINER_NAME} ps aux | grep java || echo 'Java process check failed'"
                 }
             }
         }
