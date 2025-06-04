@@ -12,8 +12,8 @@ pipeline {
         INTERNAL_PORT = "8080"
         
         // Health check settings
-        MAX_WAIT_TIME = "180" // 3 minutes in seconds
-        CHECK_INTERVAL = "10"  // 10 seconds between checks
+        MAX_WAIT_TIME = "120" // Reduced to 2 minutes since Tomcat starts in ~1 minute
+        CHECK_INTERVAL = "5"   // More frequent checks - every 5 seconds
     }
     
     stages {
@@ -83,47 +83,93 @@ pipeline {
                         echo "Container status:"
                         docker ps | grep ${CONTAINER_NAME}
                         
-                        echo "Waiting for application to start (up to ${MAX_WAIT_TIME} seconds)..."
+                        echo "Waiting for Tomcat to start (up to ${MAX_WAIT_TIME} seconds)..."
                         COUNTER=0
                         MAX_ATTEMPTS=$((MAX_WAIT_TIME / CHECK_INTERVAL))
+                        
+                        # First, wait for Tomcat to be ready (check logs for startup message)
+                        echo "Monitoring Tomcat startup..."
+                        while [ $COUNTER -lt $MAX_ATTEMPTS ]; do
+                            ATTEMPT=$((COUNTER + 1))
+                            echo "Startup check attempt $ATTEMPT/$MAX_ATTEMPTS..."
+                            
+                            # Check if Tomcat has started by looking for the startup message
+                            if docker logs ${CONTAINER_NAME} 2>&1 | grep -q "Server startup in"; then
+                                echo "✅ Tomcat has started successfully!"
+                                break
+                            fi
+                            
+                            echo "Tomcat still starting, waiting ${CHECK_INTERVAL} seconds..."
+                            sleep ${CHECK_INTERVAL}
+                            COUNTER=$((COUNTER + 1))
+                        done
+                        
+                        if [ $COUNTER -eq $MAX_ATTEMPTS ]; then
+                            echo "⚠️  Tomcat startup timeout, but continuing with health checks..."
+                        fi
+                        
+                        # Now test multiple potential endpoints
+                        echo "Testing application endpoints..."
+                        COUNTER=0
+                        
+                        # Define possible endpoints to test
+                        ENDPOINTS="/ /WebAppCal /WebAppCal/ /calculator /calculator/ /WebAppCal-1.0 /WebAppCal-1.0/"
                         
                         while [ $COUNTER -lt $MAX_ATTEMPTS ]; do
                             ATTEMPT=$((COUNTER + 1))
                             echo "Health check attempt $ATTEMPT/$MAX_ATTEMPTS..."
                             
-                            # Check if application responds
-                            if curl -f -s --connect-timeout 5 --max-time 10 http://localhost:${APP_PORT}/ > /dev/null 2>&1; then
-                                echo "✅ SUCCESS: Application is responding!"
+                            # Test each endpoint
+                            for endpoint in $ENDPOINTS; do
+                                echo "Testing endpoint: http://localhost:${APP_PORT}${endpoint}"
                                 
-                                # Show application response preview
-                                echo "Application response preview:"
-                                curl -s --connect-timeout 5 --max-time 10 http://localhost:${APP_PORT}/ | head -10
-                                
-                                # Verify Java process is running
-                                echo "Verifying Java process:"
-                                if docker exec ${CONTAINER_NAME} ps aux | grep -q java; then
-                                    echo "✅ Java process is running"
-                                else
-                                    echo "⚠️  Warning: Java process not found, but application is responding"
+                                if curl -f -s --connect-timeout 3 --max-time 5 "http://localhost:${APP_PORT}${endpoint}" > /dev/null 2>&1; then
+                                    echo "✅ SUCCESS: Application is responding at ${endpoint}!"
+                                    
+                                    # Show application response preview
+                                    echo "Application response preview:"
+                                    curl -s --connect-timeout 3 --max-time 5 "http://localhost:${APP_PORT}${endpoint}" | head -5
+                                    
+                                    # Show successful endpoint for future reference
+                                    echo "📍 Working endpoint: http://localhost:${APP_PORT}${endpoint}"
+                                    
+                                    echo "✅ Deployment verification completed successfully!"
+                                    exit 0
                                 fi
-                                
-                                echo "✅ Deployment verification completed successfully!"
-                                exit 0
-                            fi
+                            done
                             
-                            echo "Application not ready yet, waiting ${CHECK_INTERVAL} seconds..."
+                            echo "No endpoints responding yet, waiting ${CHECK_INTERVAL} seconds..."
                             sleep ${CHECK_INTERVAL}
                             COUNTER=$((COUNTER + 1))
                         done
                         
-                        # If we get here, the application failed to start
+                        # If we get here, detailed diagnostics
                         echo "❌ FAILED: Application did not respond within ${MAX_WAIT_TIME} seconds"
-                        echo "Container logs:"
-                        docker logs --tail 50 ${CONTAINER_NAME}
-                        echo "Container processes:"
-                        docker exec ${CONTAINER_NAME} ps aux || echo "Could not check container processes"
-                        echo "System resources:"
-                        docker stats --no-stream ${CONTAINER_NAME} || echo "Could not get container stats"
+                        echo ""
+                        echo "=== DIAGNOSTIC INFORMATION ==="
+                        echo "Container status:"
+                        docker ps | grep ${CONTAINER_NAME} || echo "Container not running!"
+                        
+                        echo ""
+                        echo "Container logs (last 30 lines):"
+                        docker logs --tail 30 ${CONTAINER_NAME}
+                        
+                        echo ""
+                        echo "Testing raw connection to port ${APP_PORT}:"
+                        nc -zv localhost ${APP_PORT} || echo "Port ${APP_PORT} is not accessible"
+                        
+                        echo ""
+                        echo "Tomcat webapps directory contents:"
+                        docker exec ${CONTAINER_NAME} ls -la /usr/local/tomcat/webapps/ || echo "Could not list webapps"
+                        
+                        echo ""
+                        echo "Testing direct Tomcat manager (if available):"
+                        curl -s --connect-timeout 3 "http://localhost:${APP_PORT}/manager/text/list" || echo "Manager not accessible"
+                        
+                        echo ""
+                        echo "Container resource usage:"
+                        docker stats --no-stream ${CONTAINER_NAME}
+                        
                         exit 1
                     '''
                 }
@@ -162,8 +208,6 @@ pipeline {
         always {
             script {
                 echo "Pipeline execution completed at: ${new Date()}"
-                // Archive build artifacts if needed
-                // archiveArtifacts artifacts: 'logs/*.log', allowEmptyArchive: true
             }
         }
         success {
@@ -172,26 +216,28 @@ pipeline {
             📍 Application URL: http://localhost:${APP_PORT}
             🐳 Container: ${CONTAINER_NAME}
             🏷️  Image: ${DOCKER_IMAGE}:${DOCKER_TAG}
+            
+            Try accessing:
+            - http://localhost:${APP_PORT}/
+            - http://localhost:${APP_PORT}/WebAppCal/
             """
         }
         failure {
             script {
                 echo """
                 ❌ FAILURE: Pipeline failed!
-                📋 Check the logs above for details.
+                📋 Check the diagnostic information above
                 🐳 Container logs: docker logs ${CONTAINER_NAME}
+                🔍 Try manual testing: curl http://localhost:${APP_PORT}/
                 """
                 
-                // Optional: Send notification or cleanup on failure
+                // Keep container running for debugging
                 sh '''
-                    echo "Failure cleanup - stopping failed container if running..."
-                    docker stop ${CONTAINER_NAME} || true
-                    docker logs --tail 20 ${CONTAINER_NAME} || true
+                    echo "Container left running for debugging..."
+                    echo "Access it with: docker exec -it ${CONTAINER_NAME} /bin/bash"
+                    echo "Or check logs with: docker logs ${CONTAINER_NAME}"
                 '''
             }
-        }
-        unstable {
-            echo "⚠️  UNSTABLE: Pipeline completed with warnings"
         }
     }
 }
